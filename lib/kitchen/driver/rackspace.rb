@@ -2,7 +2,7 @@
 #
 # Author:: Jonathan Hartman (<j@p4nt5.com>)
 #
-# Copyright (C) 2013, Jonathan Hartman
+# Copyright (C) 2013-2014, Jonathan Hartman
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -28,20 +28,43 @@ module Kitchen
     #
     # @author Jonathan Hartman <j@p4nt5.com>
     class Rackspace < Kitchen::Driver::SSHBase
-      default_config :version,          'v2'
-      default_config :image_id,         '8a3a9f96-b997-46fd-b7a8-a9e740796ffd'
-      default_config :flavor_id,        '2'
-      default_config :name,             nil
-      default_config :public_key_path,  File.expand_path('~/.ssh/id_dsa.pub')
-      default_config :username,         'root'
-      default_config :port,             '22'
+      default_config :version, 'v2'
+      default_config :flavor_id, 'performance1-1'
+      default_config :username, 'root'
+      default_config :port, '22'
+      default_config :rackspace_region, nil
+
+      default_config :image_id do |driver|
+        driver.default_image
+      end
+
+      default_config :server_name do |driver|
+        driver.default_name
+      end
+
+      default_config :public_key_path do |driver|
+        [
+          File.expand_path('~/.ssh/id_rsa.pub'),
+          File.expand_path('~/.ssh/id_dsa.pub'),
+          File.expand_path('~/.ssh/identity.pub'),
+          File.expand_path('~/.ssh/id_ecdsa.pub'),
+        ].find { |path| File.exists?(path) }
+      end
+
+      default_config :rackspace_username do |driver|
+        ENV['RACKSPACE_USERNAME'] || ENV['OS_USERNAME']
+      end
+
+      default_config :rackspace_api_key do |driver|
+        ENV['RACKSPACE_API_KEY'] || ENV['OS_PASSWORD']
+      end
+
+      required_config :rackspace_username
+      required_config :rackspace_api_key
+      required_config :image_id
+      required_config :public_key_path
 
       def create(state)
-        if not config[:name]
-          # Generate what should be a unique server name
-          config[:name] = "#{instance.name}-#{Etc.getlogin}-" +
-            "#{Socket.gethostname}-#{Array.new(8){rand(36).to_s(36)}.join}"
-        end
         server = create_server
         state[:server_id] = server.id
         info("Rackspace instance <#{state[:server_id]}> created.")
@@ -62,24 +85,48 @@ module Kitchen
         state.delete(:hostname)
       end
 
+      def default_image
+        images[instance.platform.name]
+      end
+
+      def default_name
+        # Generate what should be a unique server name
+        rand_str = Array.new(8) { rand(36).to_s(36) }.join
+        "#{instance.name}-#{Etc.getlogin}-#{Socket.gethostname}-#{rand_str}"
+      end
+
       private
 
       def compute
-        Fog::Compute.new(
+        server_def = {
           :provider           => "Rackspace",
           :version            => config[:version],
           :rackspace_username => config[:rackspace_username],
           :rackspace_api_key  => config[:rackspace_api_key]
-        )
+        }
+        if config[:rackspace_region]
+          server_def[:rackspace_region] = config[:rackspace_region]
+        end
+        Fog::Compute.new(server_def)
       end
 
       def create_server
         compute.servers.bootstrap(
-          :name             => config[:name],
+          :name             => config[:server_name],
           :image_id         => config[:image_id],
           :flavor_id        => config[:flavor_id],
           :public_key_path  => config[:public_key_path]
         )
+      end
+
+      def images
+        @images ||= begin
+          json_file = File.expand_path(
+            File.join(%w{.. .. .. .. data images.json}),
+            __FILE__
+          )
+          JSON.load(IO.read(json_file))
+        end
       end
     end
   end
